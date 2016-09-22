@@ -17,9 +17,10 @@
   "license": "Apache 2.0",
   "dependencies": {
     "aws-sdk": "^2.6.3",
+    "bluebird": "^3.4.6",
     "dynamodb-data-types": "^3.0.0",
     "google-auth-library": "^0.9.8",
-    "googleapis": "^13.0.0"i
+    "googleapis": "^13.0.0"
   },
   "devDependencies": {
     "proxyquire": "~1.7.2"
