@@ -1,0 +1,27 @@
+{
+  "name": "anfon-lambda",
+  "version": "0.0.10",
+  "description": "",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "build": "./build.sh",
+    "create": "./provisioning/awsCreate.sh myLambda",
+    "deploy": "./provisioning/awsUpdate.sh myLambda",
+    "invoke": "./provisioning/awsInvoke.sh myLambda",
+    "localInvoke": "node ./provisioning/localInvoke.js",
+    "test": "jasmine",
+    "test:watch": "watch jasmine ./"
+  },
+  "author": "Noam Lustiger <noshev27@gmail.com>",
+  "license": "Apache 2.0",
+  "dependencies": {
+    "aws-sdk": "^2.6.3",
+    "dynamodb-data-types": "^3.0.0",
+    "google-auth-library": "^0.9.8",
+    "googleapis": "^13.0.0"i
+  },
+  "devDependencies": {
+    "proxyquire": "~1.7.2"
+  }
+}
