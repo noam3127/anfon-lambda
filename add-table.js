@@ -1,4 +1,7 @@
+// THIS IS FOR WORKING WITH LOCAL DYNAMO DB
+
 var AWS = require("aws-sdk");
+
 
 AWS.config.update({
   region: "us-west-2",
@@ -10,8 +13,8 @@ var dynamodb = new AWS.DynamoDB();
 var params = {
   TableName : 'SlackUsers',
   KeySchema: [
-    { AttributeName: 'id', KeyType: 'HASH'},
-    {AttributeName: 'teamId', KeyType: 'RANGE' },
+    { AttributeName: 'id', KeyType: 'HASH' },
+    { AttributeName: 'teamId', KeyType: 'RANGE' },
   ],
   AttributeDefinitions: [
     { AttributeName: 'id', AttributeType: 'S' },
@@ -19,7 +22,7 @@ var params = {
   ],
   ProvisionedThroughput: {
     ReadCapacityUnits: 5,
-    WriteCapacityUnits: 2
+    WriteCapacityUnits: 5
   }
 };
 

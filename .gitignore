@@ -42,4 +42,3 @@ output.txt
 deploy.env
 event.json
 context.json
-google-credentials.js
