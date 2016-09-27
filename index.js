@@ -5,9 +5,29 @@ const Promise = require('bluebird');
 const _ = require('lodash');
 const slackApi = require('./lib/slack-api');
 const sayings = require('./lib/sayings');
-
+const formatters = require('./lib/formatters');
 const keywords = ['to', 'subject', 'body'];
 const json = JSON.stringify;
+
+function assembleBot(team, channel) {
+  let bot = {
+    team: team,
+    api: slackApi(team)
+  };
+
+  bot.say = message => {
+    if (typeof message === 'string') {
+      bot.api.send(channel, {text: message});
+    } else {
+      bot.api.send(channel, message);
+    }
+  };
+
+  for (let saying in sayings) {
+    bot[saying] = bot.say.bind(bot, sayings[saying]);
+  }
+  return bot;
+}
 
 function checkKeywords(word) {
   let regex;
@@ -54,36 +74,13 @@ function authorizeNewUser(userId, cb) {
   });
 }
 
-// function authorizeUser(userId, cb) {
-//   if (!userId) {
-//     return cb('No user_id');
-//   }
-//   db.getUser(userId, function(err, user) {
-//     if (err) return cb(err);
-//     if (!user || !user.Item) {
-//       console.log('USER NOT FOUND', user)
-//       return authorizeNewUser(userId, cb);
-//     }
-//     return cb(null, user.Item)
-//   });
-// }
-
 const saveUserToken = Promise.coroutine(function* (event, bot) {
-  let token;
-  try {
-    let code = event.text.slice('token='.length).trim();
-    token = yield googleAuth.applyNewToken(code);
-    console.log('save new token', token);
-    const saveUser = Promise.promisify(db.saveUserToken, db);
-    const user = yield saveUser(event.user_id, event.team_id, token);
-    bot.savedToken();
-  } catch(e) {
-    console.error('error saving token', e);
-    bot.error();
-  }
-
-
-
+  let code = event.text.slice('token='.length).trim();
+  let token = yield googleAuth.applyNewToken(code);
+  console.log('save new token', token);
+  const saveUser = Promise.promisify(db.saveUserToken, db);
+  const user = yield saveUser(event.user_id, event.team_id, token);
+  return user;
 });
 
 const lookupUser = function(userId, teamId) {
@@ -102,7 +99,7 @@ const lookupUser = function(userId, teamId) {
 const lookupTeam = function(teamId) {
   return new Promise(function(resolve, reject) {
     db.getTeam(teamId, function(err, team) {
-      if (err) return reject(err);
+      if (err) return reject(err); // don't reject
       if (!team || !team.Item) {
         console.log('TEAM NOT FOUND', team)
         return resolve(null);
@@ -113,22 +110,22 @@ const lookupTeam = function(teamId) {
 };
 
 const handleNewUser = function(event, bot) {
-  db.insertSlackUser(event.user_id, event.team_id, function(err) {
-    if (err) {
-      console.error(err);
-      return bot.error();
-    }
-    const url = googleAuth.getAuthUrl();
-    console.log('Welcome! In order to start sending email, you first need to authorize me by visiting this URL:\n' +url);
-    console.log('\n Then type the following: "token=<the-secret-code>" (replacing <the-secret-code> with the code you copied from that URL).');
-    bot.introduce();
-    bot.help();
+  return new Promise(function(resolve, reject) {
+    db.insertSlackUser(event.user_id, event.team_id, function(err) {
+      if (err) {
+        return reject(err);
+      }
+      const url = googleAuth.getAuthUrl();
+      bot.introduce();
+      bot.help();
+      resolve();
+    });
   });
 }
 
 
 exports.handler = Promise.coroutine(function* (event, context) {
-  let bot = {};
+
   // transform event from API Gateway
   if (event['body-json']) {
     event = event['body-json'];
@@ -142,10 +139,6 @@ exports.handler = Promise.coroutine(function* (event, context) {
 
   // process.env['PATH'] = process.env['PATH'] + ':' + process.env['LAMBDA_TASK_ROOT'];
 
-  // Respond immediately to a request sent from a slack event.
-  // Any messages from our bot will be sent via slack's 'chat.sendMessage' api
-  context.done();
-
   if (event.type === 'event_callback') {
     let _event = event.event;
     delete event.event;
@@ -154,33 +147,50 @@ exports.handler = Promise.coroutine(function* (event, context) {
     console.log('event after transformation', event);
   }
 
+  const done = () => {
+    setTimeout(context.done, 300);
+  };
 
   let team = yield lookupTeam(event.team_id);
   if (!team) {
     return console.error('no team found for ', event.team_id);
   }
 
-  bot.team = team;
-  bot.api = slackApi(team);
-  bot.say = function(message) {
-    if (typeof message === 'string') {
-      bot.api.send(event.channel, {text: message});
-    } else {
-      bot.api.send(event.channel, message);
-    }
-  };
+  // If this event was originated from us (the bot user), return
+  if (event.user_id === team.bot_user_id) {
+    return context.done();
+  }
+  let bot = assembleBot(team, event.channel);
 
-  for (let saying in sayings) {
-    bot[saying] = bot.say.bind(bot, sayings[saying]);
+  if (/^help/.test(event.text)) {
+    bot.help();
+    return done()
+  } else if (/^instructions/.test(event.text)) {
+    bot.instructions();
+    return done();
   }
 
   let user = yield lookupUser(event.user_id, event.team_id);
   if (!user) {
-    return handleNewUser(event);
+    try {
+      yield handleNewUser(event, bot);
+    } catch(e) {
+      console.error(e);
+      bot.error();
+    }
+    return done();
   }
 
   if (/^token=/.test(event.text)) {
-    return saveUserToken(event, bot);
+    try {
+      yield saveUserToken(event, bot);
+      bot.authorized();
+    } catch(e) {
+      console.error(e);
+      // bot.error();
+      bot.say('There was a problem with that token. Please try again, or type `help` for more info.')
+    }
+    return done();
   }
 
   if (!user.googleAuth.access_token) {
@@ -189,19 +199,23 @@ exports.handler = Promise.coroutine(function* (event, context) {
 
   const body = parseMessage(event.text.trim());
   if (!body.to) {
-    return bot.missingTo();
+    bot.missingTo();
+    return done();
   }
 
   if (!body.subject && !body.body) {
-    return bot.missingMessage();
+    bot.missingMessage();
+    return done();
   }
 
   try {
-    let resp = yield googleAuth.sendEmail(user.googleAuth, body);
+    // let resp = yield googleAuth.sendEmail(user.googleAuth, body);
     bot.sent();
+    bot.say(formatters.email(body));
   } catch(e) {
     console.error(e);
     bot.error();
   }
 
+  done();
 });
