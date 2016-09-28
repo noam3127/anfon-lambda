@@ -7,6 +7,7 @@ const slackApi = require('./lib/slack-api');
 const sayings = require('./lib/sayings');
 const formatters = require('./lib/formatters');
 const keywords = ['to', 'subject', 'body'];
+
 const json = JSON.stringify;
 
 function assembleBot(team, channel) {
@@ -17,9 +18,9 @@ function assembleBot(team, channel) {
 
   bot.say = message => {
     if (typeof message === 'string') {
-      bot.api.send(channel, {text: message});
+      return bot.api.send(channel, {text: message});
     } else {
-      bot.api.send(channel, message);
+      return bot.api.send(channel, message);
     }
   };
 
@@ -51,13 +52,13 @@ function parseMessage(text) {
       currentSet = key;
     } else if (currentSet) {
       body[currentSet] += ' ' + word;
-      console.log(currentSet);
     }
   });
+  console.log('paresemessage', body);
   return body;
 }
 
-function authorizeNewUser(userId, cb) {
+/*function authorizeNewUser(userId, cb) {
   googleAuth.authorizeUser(function(err, auth) {
     if (err) return cb(err);
     const userData = {
@@ -72,15 +73,28 @@ function authorizeNewUser(userId, cb) {
        db.getUser(userId, cb);
     });
   });
-}
+}*/
 
-const saveUserToken = Promise.coroutine(function* (event, bot) {
-  let code = event.text.slice('token='.length).trim();
-  let token = yield googleAuth.applyNewToken(code);
-  console.log('save new token', token);
-  const saveUser = Promise.promisify(db.saveUserToken, db);
-  const user = yield saveUser(event.user_id, event.team_id, token);
-  return user;
+const saveUserToken = Promise.coroutine(function* (event, code, bot, done) {
+ try {
+    let token = yield googleAuth.applyNewToken(code);
+    const saveUser = Promise.promisify(db.saveUserToken, db);
+    const user = yield saveUser(event.user_id, event.team_id, token);
+    const text = sayings.authorized;
+    if (event.command) {
+      yield bot.api.commandResponse(sayings.authorized, event.response_url);
+      return done(null, sayings.authorized);
+    } else{
+      yield bot.authorized();
+    }
+  } catch(e) {
+    if (event.command) {
+      yield bot.api.commandResponse(sayings.tokenCommandError, event.response_url);
+    } else {
+      yield bot.tokenError();
+    }
+  }
+  return done();
 });
 
 const lookupUser = function(userId, teamId) {
@@ -123,8 +137,14 @@ const handleNewUser = function(event, bot) {
   });
 }
 
-
-exports.handler = Promise.coroutine(function* (event, context) {
+// Lambda entry point
+exports.handler = Promise.coroutine(function* (event, context, cb) {
+  context.callbackWaitsForEmptyEventLoop = false;
+  const done = () => {
+    event = null;
+    context = null;
+    cb();
+  };
 
   // transform event from API Gateway
   if (event['body-json']) {
@@ -134,22 +154,16 @@ exports.handler = Promise.coroutine(function* (event, context) {
   // Handle Slack's endpoint verification
   if (event.challenge) {
     console.log('recieved challenge', event);
-    return context.done(null, {challenge: event.challenge});
+    return done(null, {challenge: event.challenge});
   }
-
-  // process.env['PATH'] = process.env['PATH'] + ':' + process.env['LAMBDA_TASK_ROOT'];
 
   if (event.type === 'event_callback') {
     let _event = event.event;
     delete event.event;
     _.assign(event, _event);
     event.user_id = event.user;
-    console.log('event after transformation', event);
   }
-
-  const done = () => {
-    setTimeout(context.done, 300);
-  };
+  console.log('event post transformation:', event);
 
   let team = yield lookupTeam(event.team_id);
   if (!team) {
@@ -163,10 +177,10 @@ exports.handler = Promise.coroutine(function* (event, context) {
   let bot = assembleBot(team, event.channel);
 
   if (/^help/.test(event.text)) {
-    bot.help();
-    return done()
+    yield bot.help();
+    return done();
   } else if (/^instructions/.test(event.text)) {
-    bot.instructions();
+    yield bot.instructions();
     return done();
   }
 
@@ -176,46 +190,43 @@ exports.handler = Promise.coroutine(function* (event, context) {
       yield handleNewUser(event, bot);
     } catch(e) {
       console.error(e);
-      bot.error();
+      yield bot.error();
     }
     return done();
   }
 
+  let token, isSlashCommand;
   if (/^token=/.test(event.text)) {
-    try {
-      yield saveUserToken(event, bot);
-      bot.authorized();
-    } catch(e) {
-      console.error(e);
-      // bot.error();
-      bot.say('There was a problem with that token. Please try again, or type `help` for more info.')
-    }
-    return done();
+    token = event.text.slice('token='.length).trim();
+    return saveUserToken(event, token, bot, done);
+  } else if (!token && event.command && event.command === '/anfon-token') {
+    token = event.text;
+    return saveUserToken(event, token, bot, done);
   }
 
   if (!user.googleAuth.access_token) {
-    return bot.unauthorized();
+    yield bot.unauthorized();
+    return done();
   }
 
   const body = parseMessage(event.text.trim());
   if (!body.to) {
-    bot.missingTo();
-    return done();
+    return bot.missingTo().then(() => done());
   }
 
   if (!body.subject && !body.body) {
-    bot.missingMessage();
+    yield bot.missingMessage();
     return done();
   }
 
   try {
-    // let resp = yield googleAuth.sendEmail(user.googleAuth, body);
-    bot.sent();
-    bot.say(formatters.email(body));
+    let resp = yield googleAuth.sendEmail(user.googleAuth, body);
   } catch(e) {
     console.error(e);
-    bot.error();
+    yield bot.say(':slightly_frowning_face: There was a problem with sending that email:\n_' + e.errors[0].message + '_');
+    return done();
   }
-
+  yield bot.say(formatters.email(body));
+  yield bot.sent();
   done();
 });
