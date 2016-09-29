@@ -42,19 +42,21 @@ function checkKeywords(word) {
 }
 
 function parseMessage(text) {
-  const arr = text.split(' ').filter(word => word !== ' ');
+  const regex = /(to:|subject:|body:)/;
   const body = {};
-  var currentSet = null;
-  arr.forEach(word => {
-    let key = checkKeywords(word);
-    if (key) {
-      body[key] = word.slice(key.length + 1);
-      currentSet = key;
-    } else if (currentSet) {
-      body[currentSet] += ' ' + word;
+  const arr = text.split(regex).map(w => w.trim()).filter(w => w !== '');
+  arr.forEach((e, i) => {
+    let word = checkKeywords(e);
+    if (word) {
+      let phrase = arr[i + 1];
+      if (word === 'to' && phrase.indexOf('|') !== -1) {
+        phrase = phrase.slice(0, phrase.indexOf('|'));
+      }
+      body[word] = phrase.trim();
     }
   });
-  console.log('paresemessage', body);
+
+  console.log('parsed message:', body);
   return body;
 }
 
@@ -83,7 +85,7 @@ const saveUserToken = Promise.coroutine(function* (event, code, bot, done) {
     const text = sayings.authorized;
     if (event.command) {
       yield bot.api.commandResponse(sayings.authorized, event.response_url);
-      return done(null, sayings.authorized);
+      return done(null, {text: ':email:'});
     } else{
       yield bot.authorized();
     }
@@ -140,10 +142,11 @@ const handleNewUser = function(event, bot) {
 // Lambda entry point
 exports.handler = Promise.coroutine(function* (event, context, cb) {
   context.callbackWaitsForEmptyEventLoop = false;
-  const done = () => {
+
+  const done = (err, data) => {
     event = null;
     context = null;
-    cb();
+    cb(err, data);
   };
 
   // transform event from API Gateway
@@ -209,7 +212,7 @@ exports.handler = Promise.coroutine(function* (event, context, cb) {
     return done();
   }
 
-  const body = parseMessage(event.text.trim());
+  const body = parseMessage(event.text);
   if (!body.to) {
     return bot.missingTo().then(() => done());
   }
@@ -220,7 +223,7 @@ exports.handler = Promise.coroutine(function* (event, context, cb) {
   }
 
   try {
-    let resp = yield googleAuth.sendEmail(user.googleAuth, body);
+    yield googleAuth.sendEmail(user.googleAuth, body);
   } catch(e) {
     console.error(e);
     yield bot.say(':slightly_frowning_face: There was a problem with sending that email:\n_' + e.errors[0].message + '_');
